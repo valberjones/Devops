@@ -1,0 +1,114 @@
+[Firewall Dinâmico para Zimbra]
+Motivação:
+
+A conta de administrador do Zimbra recebe mensagens com notificações de origem de spams com os respectivos IPs dos supostos spammers. Foi sugerida a criação de uma solução que bloqueasse pelo período de 15 dias o acesso desses endereços ao servidor de e-mail.
+Serviços utilizados:
+
+* Getmail 4
+* Iptables
+Configuração do Ambiente:
+
+É recomendado a criação de uma conta de e-mail para que receba através do encaminhamento cópias das mensagens que a conta admin@ifce.edu.br com as notificações. Neste caso foi criada a conta spamhunter@ifce.edu.br para receber os e-mails com as notificações. Todos procedimentos descritos abaixo devem ser realizados no servidor responsável por receber os e-mails.
+Configuração do Getmail 4:
+
+Instalação do GetMail 4:
+
+  
+sudo apt-get update 
+sudo apt-get install getmail4
+
+É necessária a criação do diretório onde será armazenado o arquivo de configuração do getmail no home do usuário que irá baixar os e-mails:
+
+  
+mkdir /home/operador/.getmail 
+
+Criação do arquivo de configuração para que seja possível baixar os emails:
+
+  
+vim /home/operador/.getmail/getmailrc
+
+Conteúdo do arquivo com comentários:
+
+[retriever]
+# Tipo de servidor pode ser POP ou IMAP, neste caso foi definido POP
+type = SimplePOP3SSLRetriever
+# Endereço do Servidor POP
+server = pop.xxxx.xx.xx
+# Nome de usuário do e-mail
+username = xxxx@xxxx.xx.xx
+# Senha da conta de e-mail
+password = xxxxx
+mailboxes = ("out.xxx",)
+[destination]
+type = Mboxrd
+# Endereço do arquivo com conteúdo dos e-mails baixados
+path = ~/mail/emails.mbox
+[options]
+# print messages about each action (verbose = 2)
+# Other options:
+# 0 displays warnings and errors
+# 1 displays messages about retrieving and deleting messages
+read_all = false
+# Apaga os emails do servidor depois de baixar
+delete = true
+verbose = 2
+# Endereço do arquivo de log do serviço de e-mail do usuário
+message_log = ~/.getmail/xxxxmail.log
+
+Criação do script que irá baixar os e-mails, extrair os endereços IPs dos possíveis spammers e irá gerar as regras no firewall local da máquina do zimbra:
+
+ 
+vim /home/user/antispam
+
+Conteúdo do Script comentado:
+
+ 
+#!/bin/bash
+# Cria arquivo que irá armazenar o conteúdo dos e-mails
+touch /home/user/mail/emails.mbox
+# Executa o getmail com isso os e-mails serão baixados
+getmail
+# Extrai o IP dos e-mails de notificação dos spams e cria uma lista dos Ips a serem bloqueados no arquivo /home/operador/lista  
+cat /home/user/mail/emails.mbox | grep 'localhost localhost' | cut -d "," -f1 | cut -d "[" -f 2 | cut -d "]" -f 1 > /home/operador/lista
+
+# Enviado Regras para o Firewall com bloqueio de 15 dias para cada IP recebido da lista
+
+# Define variáveis 
+SPAMLIST="spamlist"
+SPAMDROPMSG="SPAM LIST DROP"
+BADIPS=$(egrep -v -E "^#|^$" /home/operador/lista)
+dateatual=`date +%Y/%m/%d | sed 's/\//-/' | sed 's/\//-/'`
+datefinal=`date +%Y/%m/%d -d "+15 days" | sed 's/\//-/' | sed 's/\//-/'`
+datefinal2=`date +%Y/%m/%d -d "+1 days" | sed 's/\//-/' | sed 's/\//-/'`
+# Cria nova lista no iptables
+sudo /sbin/iptables -N $SPAMLIST
+for ipblock in $BADIPS
+do
+sudo /sbin/iptables -A $SPAMLIST -s $ipblock -m time --kerneltz --datestart $dateatual --datestop $datefinal -j DROP
+done
+sudo /sbin/iptables -A INPUT -s REDE/24 -m time --kerneltz --datestart $dateatual --datestop $datefinal2 -j ACCEPT
+sudo /sbin/iptables -A INPUT -s 127.0.0.1 -m time --kerneltz --datestart $dateatual --datestop $datefinal2 -j ACCEPT
+# Gera lista com todos os IPs que já foram bloqueados pelo menos uma vez no Firewall
+cat /home/operador/lista >> /home/operador/blacklist
+# Limpa os e-mails baixados 
+rm -rf /home/operador/mail/emails.mbox
+# Limpa a lista de IPs gerada na execução do script
+rm -rf /home/operador/lista
+
+Preparando o do Script para execução :
+
+chmod 777 /home/operador/antispam
+chmod +x /home/operador/antispam
+
+Incluindo o Script na Crontab do usuário para execução a cada uma hora:
+
+crontab -e
+
+Deverá ser adicionada na última linha o seguinte conteúdo:
+
+0   *   *   *   *    /home/operador/antispam
+
+Referencias:
+
+    http://pyropus.ca/software/getmail/documentation.html
+    http://www.guiafoca.org/cgs/guia/avancado/ch-fw-iptables.html
